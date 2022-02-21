@@ -1,0 +1,106 @@
+def fft_filter(img, mask, Visualize_process=False):
+    """
+    This function filters an image using a given filter mask in the frequency domain. To generate an appropriate
+    low pass or high pass filter mask, you can use the function generate_filter_mask provided in helpers
+    :param Visualize_process: set True if you want to see the spectrum of the image, the mask, & the filtered image
+    :param img: the image to be filtered
+    :param mask: the filter mask used in the filtering
+    :return: the filtered image
+    """
+
+    def filter_one_channel(img, mask):
+        # step1: getting the spectrum of the image: dft is a 3D array where the third dimension has two channels; the
+        # first is the real part and the 2nd is the imaginary part
+        dft = cv2.dft(np.float32(img), flags=cv2.DFT_COMPLEX_OUTPUT)
+
+        # normally the spectrum starts at the leftmost upper corner of the array, we would like to shift it to the
+        # so that the low frequencies would be centered at the origin and the higher frequencies on the outside
+        shifted_dft = np.fft.fftshift(dft)
+
+        # here we're calculating the magnitude spectrum of the image from the real and imaginary parts for visualization
+        image_spectrum = 20 * np.log(cv2.magnitude(shifted_dft[:, :, 0], shifted_dft[:, :, 1]))
+
+        # now we will apply the filter mask on both the real and imaginary parts
+        filtered_shifted_dft = shifted_dft * np.dstack((mask, mask))
+
+        # np.log spits out a warning whenever it gets a zero because the log of zero is undefined. To avoid this,
+        # we're adding a very small number in place of the zeros (whose value won't affect the final result)
+        zero_dummy = np.ones_like(filtered_shifted_dft) * 10 ** -12
+        filtered_shifted_dft = filtered_shifted_dft + zero_dummy
+
+        # getting the spectrum of the filtered result for visualization
+        filtered_spectrum = 20 * np.log(cv2.magnitude(filtered_shifted_dft[:, :, 0], filtered_shifted_dft[:, :, 1]))
+
+        # undoing the dft shift
+        inverse_shift = np.fft.ifftshift(filtered_shifted_dft)
+
+        # undoing the dft (inverse dft) - to get the filtered image back
+        idft = cv2.idft(inverse_shift)
+        filtered_image = cv2.magnitude(idft[:, :, 0], idft[:, :, 1])
+        cv2.normalize(filtered_image, filtered_image, 0, 1, cv2.NORM_MINMAX)
+
+        return filtered_image, image_spectrum, filtered_spectrum
+
+    gray = len(img.shape) == 2
+
+    if gray:
+        filtered_image, image_spectrum, filtered_spectrum = filter_one_channel(img, mask)
+    else:
+        f1, s1, fs1 = filter_one_channel(img[:, :, 0], mask)
+        f2, s2, fs2 = filter_one_channel(img[:, :, 1], mask)
+        f3, s3, fs3 = filter_one_channel(img[:, :, 2], mask)
+        filtered_image = np.dstack((f1, f2, f3))
+        image_spectrum = np.dstack((s1, s2, s3))
+        filtered_spectrum = np.dstack((fs1, fs2, fs3))
+        mask = np.dstack((mask, mask, mask))
+
+    if Visualize_process:
+        cv2.normalize(image_spectrum, image_spectrum, 0, 1, cv2.NORM_MINMAX)
+        cv2.normalize(filtered_spectrum, filtered_spectrum, 0, 1, cv2.NORM_MINMAX)
+
+        stacked = np.hstack((image_spectrum, mask, filtered_spectrum))
+        save_image("../results/FFT_img_spectrum+filter+output_spectrum.jpg", stacked)
+        save_image("../results/fft_filtered_output.jpg", filtered_image)
+        show_images([img, image_spectrum, mask, filtered_spectrum, filtered_image],
+                    ['original', 'image spectrum', 'filter mask', 'filtered spectrum', 'filtered image'])
+
+    return filtered_image
+
+
+
+
+
+
+def generate_gaussian_filter_mask(im_size, filt_type='LPF', radius=50):
+    """
+    This function generates a gaussian  low pass or high pass filter mask with the image dimensions to use for
+    filtering in the frequency domain.
+    :param im_size: the size of the filter (which should be the same size as the image)
+    :param filt_type: the type of the filter
+    :param radius: the radius of the gaussian cloud, for an LPF, the smaller the radius the more frequencies you cutoff
+                    for an HPF the opposite is true.
+    :return:a filter kernel mask of size im_size
+    """
+
+    # to calculate the distance between two points in a 2d plane
+    def distance(p1, p2):
+        return sqrt((p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2)
+
+    # initializing the mask with the given size
+    mask = np.zeros(im_size[:2])
+    r, c = im_size[:2]
+
+    # the dimensions of the center (the distance from which is used in the calculation of each pixel value)
+    center_point = (r / 2, c / 2)
+
+    # calculating the pixel values in the mask as a negative exponential of the squared distance from the center
+    for x in range(c):
+        for y in range(r):
+            mask[y, x] = exp(((-distance((y, x), center_point) ** 2) / (2 * (radius ** 2))))
+
+    # the high pass filter is just the 1- the low pass values
+    if filt_type == 'HPF':
+        mask = np.ones_like(mask) - mask
+
+    return mask
+
